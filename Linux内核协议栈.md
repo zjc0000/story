@@ -1,10 +1,10 @@
-# 13.Linux内核协议栈
+# Linux内核协议栈之网络层
 ***参考链接：***
 https://www.cnblogs.com/jmilkfan-fanguiju/p/12789808.html
 https://blog.csdn.net/wangquan1992/category_10378048_2.html
 
 ![linux协议栈示意图（初版）](https://github.com/zjc0000/story_images/raw/main/小书匠/1663650406600.png)
-## 13.1 ipv4接收数据包流程
+## 1 ipv4接收数据包流程
 当设备接口层处理完输入数据包后，如果发现该报文应该由IP协议进一步处理，那么将会调用ip_rcv()函数。该接口完成对网络层数据包的校验和解析，之后通过netfilter模块和路由模块将处理后的数据包或转发或转给本机4层继续解析。核心流程如下：
 （1）设备接口层处理完数据包后，调用ip_rcv()将数据包交由IP层继续处理；
 （2）IP层首先做些简单的校验后，就尝试过 netfilter 的 PREROUTING 点；
@@ -15,7 +15,7 @@ https://blog.csdn.net/wangquan1992/category_10378048_2.html
 主要涉及如下文件：
 net/ipv4/ip_input.c	IP协议输入报文处理过程
 net/ipv4/ip_forward.c	IP协议转发报文处理过程
-### 13.1.1 ip_rcv()
+### 1.1 ip_rcv()
 完成IP报文基本的校验和处理工作：
 （1）丢弃PACKET_OTHERHOST类型的包
 （2）校验ip头的长度和版本，校验skb长度、ip头长度以及ip包总长度
@@ -110,11 +110,11 @@ out:
 	return NET_RX_DROP;
 }
 ```
-### 13.1.2 PRE_ROUTING钩子点
+### 1.2 PRE_ROUTING钩子点
 根据钩子函数注册源码可以看出在相同优先级情况下，后注册的钩子反而在先注册钩子的前面。
 钩子点完成什么工作?
 
-### 13.1.3 ip_rcv_finish()
+### 1.3 ip_rcv_finish()
 查找路由确定报文时分发出去还是传给上层继续解析：
 （1）数据包已经填充好skb_dst(skb)->input字段则直接调用
 （2）否则调用ip_route_input_noref函数为其查找并填充，往本地协议栈上传就填充 ip_local_deliver，转发就填充ip_forward 
@@ -209,7 +209,7 @@ drop_error:
 }
 ```
 
-### 13.1.4 dst_input()
+### 1.4 dst_input()
 实际上调用skb_dst(skb)->input字段，往本地协议栈上传就调用 ip_local_deliver，如果是转发就调用ip_forward 
 ```c
 /* Input packet from network to transport.  */
@@ -221,7 +221,7 @@ static inline int dst_input(struct sk_buff *skb)
 }
 ```
 
-### 13.1.5 ip_local_deliver()
+### 1.5 ip_local_deliver()
 完成IP数据包的分片重组工作
 ```c
 int ip_local_deliver(struct sk_buff *skb)
@@ -244,11 +244,11 @@ int ip_local_deliver(struct sk_buff *skb)
 		       ip_local_deliver_finish);
 }
 ```
-### 13.1.6 LOCAL_IN钩子点
+### 1.6 LOCAL_IN钩子点
 
 
 
-### 13.1.7 ip_local_deliver_finish()
+### 1.7 ip_local_deliver_finish()
 协议栈的原始套接字从实现上可以分为“链路层原始套接字”和“网络层原始套接字”两大类。
 
 
