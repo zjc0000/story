@@ -63,7 +63,7 @@ int __ip_local_out(struct sk_buff *skb)
 }
 ```
 ### 1.2 dst_output()
-这里实际上会调用路由查询结果中的output()，路由查询是在什么地方进行的？
+这里实际上会调用路由查询结果中的output(),在L4层中填充。
 ```c
 /* Output packet to network from transport.  */
 static inline int dst_output(struct sk_buff *skb)
