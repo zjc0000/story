@@ -1,13 +1,13 @@
- Linux内核协议栈之网络层
+# Linux内核协议栈之网络层
 
 
 [toc]
+## 1.网络层协议整体流程图
 
+![网络层协议栈整体流程图](https://github.com/zjc0000/story_images/raw/main/小书匠/1663760030872.png)
 
-![网络层协议栈整体架构](https://github.com/zjc0000/story_images/raw/main/小书匠/1663760030872.png)
-
-## 1.IPv4发送数据包流程
-### 1.0 上层发送接口
+## 2.IPv4发送数据包流程
+### 2.1 上层发送接口
 IP层对外提供了多个发送接口，高层协议会根据需要进行调用。发送接口处理完毕后，都会调用ip_local_out()进行报文发送。
 
 **对于TCP协议：**
@@ -21,13 +21,13 @@ udp_push_pending_frames函数->ip_push_pending_frames函数->ip_send_skb函数->
 **对于ICMP协议：**
 icmp_send函数-> icmp_push_reply函数->ip_push_pending_frames函数->ip_send_skb函数-> ip_local_out函数
 
-#### 1.0.1 ip_queue_xmit()
-#### 1.0.2 ip_build_and_send_pkt()
-#### 1.0.3 ip_send_unicast_reply()
-#### 1.0.4 ip_push_pending_frames()
-#### 1.0.5 ip_send_skb()
+#### 2.1.1 ip_queue_xmit()
+#### 2.1.2 ip_build_and_send_pkt()
+#### 2.1.3 ip_send_unicast_reply()
+#### 2.1.4 ip_push_pending_frames()
+#### 2.1.5 ip_send_skb()
 
-### 1.1 ip_local_out()
+### 2.2 ip_local_out()
 ```c
 int ip_local_out(struct sk_buff *skb)
 {
@@ -62,7 +62,7 @@ int __ip_local_out(struct sk_buff *skb)
 		       dst_output);
 }
 ```
-### 1.2 dst_output()
+### 2.3 dst_output()
 这里实际上会调用路由查询结果中的output(),在L4层中填充。
 ```c
 /* Output packet to network from transport.  */
@@ -75,7 +75,7 @@ static inline int dst_output(struct sk_buff *skb)
 	return skb->dst->output(skb);
 }
 ```
-### 1.3 ip_output()
+### 2.4 ip_output()
 ```c
 int ip_output(struct net *net, struct sock *sk, struct sk_buff *skb)
 {
@@ -93,7 +93,7 @@ int ip_output(struct net *net, struct sock *sk, struct sk_buff *skb)
 			    !(IPCB(skb)->flags & IPSKB_REROUTED));
 }
 ```
-### 1.4 ip_finish_output()
+### 2.5 ip_finish_output()
 ```c
 static int ip_finish_output(struct net *net, struct sock *sk, struct sk_buff *skb)
 {
@@ -118,7 +118,7 @@ static int ip_finish_output(struct net *net, struct sock *sk, struct sk_buff *sk
 	return ip_finish_output2(net, sk, skb);
 }
 ```
-### 1.5 ip_finish_output2()
+### 2.6 ip_finish_output2()
 ```c
 static int ip_finish_output2(struct net *net, struct sock *sk, struct sk_buff *skb)
 {
@@ -183,7 +183,7 @@ static int ip_finish_output2(struct net *net, struct sock *sk, struct sk_buff *s
 	return -EINVAL;
 }
 ```
-## 2.IPv4接收数据包流程
+## 3.IPv4接收数据包流程
 当设备接口层处理完输入数据包后，如果发现该报文应该由IP协议进一步处理，那么将会调用ip_rcv()函数。该接口完成对网络层数据包的校验和解析，之后通过netfilter模块和路由模块将处理后的数据包或转发或转给本机4层继续解析。核心流程如下：
 （1）设备接口层处理完数据包后，调用ip_rcv()将数据包交由IP层继续处理；
 （2）IP层首先做些简单的校验后，就尝试过 netfilter 的 PREROUTING 点；
@@ -191,7 +191,7 @@ static int ip_finish_output2(struct net *net, struct sock *sk, struct sk_buff *s
 （4）对于递交给本机的数据包，过 LOCAL_IN 点，然后根据 IP 首部的协议字段，查找高层协议处理函数，然后调用该函数，将数据包交给高层协议继续处理；
 （5）对于需要转发的数据包，根据转发的需要，修改IP首部内容（TTL），然后过FORWARD点，最后走和本机发送数据包一样的流程将数据包转发出去。
 
-### 2.1 ip_rcv()
+### 3.1 ip_rcv()
 ```c
 int ip_rcv(struct sk_buff *skb, struct net_device *dev, struct packet_type *pt, struct net_device *orig_dev)
 {
@@ -296,7 +296,7 @@ out:
 	return NET_RX_DROP;
 }
 ```
-### 2.2 ip_rcv_finish()
+### 3.2 ip_rcv_finish()
 ```c
 static int ip_rcv_finish(struct net *net, struct sock *sk, struct sk_buff *skb)
 {
@@ -400,7 +400,7 @@ drop_error:
 }
 ```
 
-### 2.3 dst_input()
+### 3.3 dst_input()
 实际上调用skb_dst(skb)->input字段，往本地协议栈上传就调用 ip_local_deliver，如果是转发就调用ip_forward 
 ```c
 /* Input packet from network to transport.  */
@@ -412,7 +412,7 @@ static inline int dst_input(struct sk_buff *skb)
 }
 ```
 
-### 2.4 ip_local_deliver()
+### 3.4 ip_local_deliver()
 完成IP数据包的分片重组工作
 ```c
 int ip_local_deliver(struct sk_buff *skb)
@@ -435,7 +435,7 @@ int ip_local_deliver(struct sk_buff *skb)
 }
 ```
 
-### 2.5 ip_local_deliver_finish()
+### 3.5 ip_local_deliver_finish()
 ```c
 static int ip_local_deliver_finish(struct net *net, struct sock *sk, struct sk_buff *skb)
 {
@@ -497,8 +497,8 @@ static int ip_local_deliver_finish(struct net *net, struct sock *sk, struct sk_b
 }
 ```
 
-## 3.IPv4转发数据包流程
-### 3.1 ip_forward()
+## 4.IPv4转发数据包流程
+### 4.1 ip_forward()
 ```c
 int ip_forward(struct sk_buff *skb)
 {
@@ -600,7 +600,7 @@ drop:
 }
 ```
 
-### 3.2 ip_forward_finish()
+### 4.2 ip_forward_finish()
 ```c
 static int ip_forward_finish(struct net *net, struct sock *sk, struct sk_buff *skb)
 {
