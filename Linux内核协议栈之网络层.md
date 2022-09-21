@@ -192,10 +192,6 @@ static int ip_finish_output2(struct net *net, struct sock *sk, struct sk_buff *s
 
 ### 2.1 ip_rcv()
 ```c
-@skb: 数据包
-@dev：数据包的当前输入网络设备（层二可能会使用一些聚合技术）
-@pt：数据包的类型
-@orig_dev: 接收数据包的原始网络设备
 int ip_rcv(struct sk_buff *skb, struct net_device *dev, struct packet_type *pt, struct net_device *orig_dev)
 {
 	const struct iphdr *iph;
@@ -301,42 +297,105 @@ out:
 ```
 ### 2.2 ip_rcv_finish()
 ```c
-static int ip_rcv_finish(struct sk_buff *skb)
+static int ip_rcv_finish(struct net *net, struct sock *sk, struct sk_buff *skb)
 {
 	const struct iphdr *iph = ip_hdr(skb);
+	int (*edemux)(struct sk_buff *skb);
+	struct net_device *dev = skb->dev;
 	struct rtable *rt;
- 
+	int err;
+
+	/* if ingress device is enslaved to an L3 master device pass the
+	 * skb to its handler for processing
+	 */
+	skb = l3mdev_ip_rcv(skb);
+	if (!skb)
+		return NET_RX_SUCCESS;
+
+	if (net->ipv4.sysctl_ip_early_demux &&
+	    !skb_dst(skb) &&
+	    !skb->sk &&
+	    !ip_is_fragment(iph)) {
+		const struct net_protocol *ipprot;
+		int protocol = iph->protocol;
+
+		ipprot = rcu_dereference(inet_protos[protocol]);
+		if (ipprot && (edemux = READ_ONCE(ipprot->early_demux))) {
+			err = edemux(skb);
+			if (unlikely(err))
+				goto drop_error;
+			/* must reload iph, skb->head might have changed */
+			iph = ip_hdr(skb);
+		}
+	}
+
 	/*
 	 *	Initialise the virtual path cache for the packet. It describes
 	 *	how the packet travels inside Linux networking.
 	 */
-    // 如果数据包还没有目的路由，则通过路由子系统的ip_route_input()查询路由，
+	// 如果数据包还没有目的路由，则通过路由子系统的ip_route_input_noref()查询路由，
     // 进而决定该数据包的去向
-	if (skb->dst == NULL) {
-		// 路由查询失败，那么会更新统计信息后丢弃数据包
-		int err = ip_route_input(skb, iph->daddr, iph->saddr, iph->tos, skb->dev);
-		if (unlikely(err)) {
-			if (err == -EHOSTUNREACH)
-				IP_INC_STATS_BH(IPSTATS_MIB_INADDRERRORS);
-			else if (err == -ENETUNREACH)
-				IP_INC_STATS_BH(IPSTATS_MIB_INNOROUTES);
-			goto drop;
-		}
+	if (!skb_valid_dst(skb)) {
+		err = ip_route_input_noref(skb, iph->daddr, iph->saddr,
+					   iph->tos, dev);
+		if (unlikely(err))
+			goto drop_error;
 	}
+
+#ifdef CONFIG_IP_ROUTE_CLASSID
+	if (unlikely(skb_dst(skb)->tclassid)) {
+		struct ip_rt_acct *st = this_cpu_ptr(ip_rt_acct);
+		u32 idx = skb_dst(skb)->tclassid;
+		st[idx&0xFF].o_packets++;
+		st[idx&0xFF].o_bytes += skb->len;
+		st[(idx>>16)&0xFF].i_packets++;
+		st[(idx>>16)&0xFF].i_bytes += skb->len;
+	}
+#endif
+
 	// 如果该数据包包含IP选项，则解析这些选项并进行一定的处理
 	if (iph->ihl > 5 && ip_rcv_options(skb))
 		goto drop;
-	// 根据目的路由信息，如果需要，更新多播和广播统计
-	rt = (struct rtable*)skb->dst;
-	if (rt->rt_type == RTN_MULTICAST)
-		IP_INC_STATS_BH(IPSTATS_MIB_INMCASTPKTS);
-	else if (rt->rt_type == RTN_BROADCAST)
-		IP_INC_STATS_BH(IPSTATS_MIB_INBCASTPKTS);
+
+	rt = skb_rtable(skb);
+	if (rt->rt_type == RTN_MULTICAST) {
+		__IP_UPD_PO_STATS(net, IPSTATS_MIB_INMCAST, skb->len);
+	} else if (rt->rt_type == RTN_BROADCAST) {
+		__IP_UPD_PO_STATS(net, IPSTATS_MIB_INBCAST, skb->len);
+	} else if (skb->pkt_type == PACKET_BROADCAST ||
+		   skb->pkt_type == PACKET_MULTICAST) {
+		struct in_device *in_dev = __in_dev_get_rcu(dev);
+
+		/* RFC 1122 3.3.6:
+		 *
+		 *   When a host sends a datagram to a link-layer broadcast
+		 *   address, the IP destination address MUST be a legal IP
+		 *   broadcast or IP multicast address.
+		 *
+		 *   A host SHOULD silently discard a datagram that is received
+		 *   via a link-layer broadcast (see Section 2.4) but does not
+		 *   specify an IP multicast or broadcast destination address.
+		 *
+		 * This doesn't explicitly say L2 *broadcast*, but broadcast is
+		 * in a way a form of multicast and the most common use case for
+		 * this is 802.11 protecting against cross-station spoofing (the
+		 * so-called "hole-196" attack) so do it for both.
+		 */
+		if (in_dev &&
+		    IN_DEV_ORCONF(in_dev, DROP_UNICAST_IN_L2_MULTICAST))
+			goto drop;
+	}
 	// 根据目的路由进行向上分发，或者是转发
 	return dst_input(skb);
+
 drop:
 	kfree_skb(skb);
 	return NET_RX_DROP;
+
+drop_error:
+	if (err == -EXDEV)
+		__NET_INC_STATS(net, LINUX_MIB_IPRPFILTER);
+	goto drop;
 }
 ```
 
@@ -355,48 +414,50 @@ static inline int dst_input(struct sk_buff *skb)
 ### 2.4 ip_local_deliver()
 完成IP数据包的分片重组工作
 ```c
-/*
- * 	Deliver IP Packets to the higher protocol layers.
- */
 int ip_local_deliver(struct sk_buff *skb)
 {
+	/*
+	 *	Reassemble IP fragments.
+	 */
+	struct net *net = dev_net(skb->dev);
+	
 	// 首先检查该IP数据报是否是分片，如果是则要调用ip_defrag()尝试进行组装，组装成功则继续处理，
     // 否则需要先进行缓存等待其它分组的到达
-	if (ip_hdr(skb)->frag_off & htons(IP_MF | IP_OFFSET)) {
-		if (ip_defrag(skb, IP_DEFRAG_LOCAL_DELIVER))
+	if (ip_is_fragment(ip_hdr(skb))) {
+		if (ip_defrag(net, skb, IP_DEFRAG_LOCAL_DELIVER))
 			return 0;
 	}
 	// 进入LOCAL_IN HOOK点,如果通过则调用ip_local_deliver_finish()继续处理
-	return NF_HOOK(PF_INET, NF_INET_LOCAL_IN, skb, skb->dev, NULL, ip_local_deliver_finish);
+	return NF_HOOK(NFPROTO_IPV4, NF_INET_LOCAL_IN,
+		       net, NULL, skb, skb->dev, NULL,
+		       ip_local_deliver_finish);
 }
 ```
 
 ### 2.5 ip_local_deliver_finish()
 ```c
-static int ip_local_deliver_finish(struct sk_buff *skb)
+static int ip_local_deliver_finish(struct net *net, struct sock *sk, struct sk_buff *skb)
 {
 	// 在skb中将IP首部删掉
-	__skb_pull(skb, ip_hdrlen(skb));
-    // 设置skb->transport_header指针使其指向SKB的data开始位置，这样方便更高层协议处理
-	skb_reset_transport_header(skb);
- 
+	__skb_pull(skb, skb_network_header_len(skb));
+
 	rcu_read_lock();
 	{
-    	// 取出IP首部的协议字段，根据该字段寻找对应的上层协议
+		// 取出IP首部的协议字段，根据该字段寻找对应的上层协议
 		int protocol = ip_hdr(skb)->protocol;
-		int hash, raw;
-		struct net_protocol *ipprot;
- 
+		const struct net_protocol *ipprot;
+		int raw;
+
 	resubmit:
-    	// 网络层 RAW 套接字处理
+		// 网络层 RAW 套接字处理
 		raw = raw_local_deliver(skb, protocol);
-		// 计算好哈希值
-		hash = protocol & (MAX_INET_PROTOS - 1);
-        // 从inet_protos数组中寻找上层协议提供的接收处理回调，在协议族初始化时，
-        // 所有的上层协议都会将自己的接收处理接口注册到该数组中
-		if ((ipprot = rcu_dereference(inet_protos[hash])) != NULL) {
+		
+		// 从inet_protos数组中寻找上层协议提供的接收处理回调
+		// 在协议族初始化时,所有的上层协议都会将自己的接收处理接口注册到该数组中
+		ipprot = rcu_dereference(inet_protos[protocol]);
+		if (ipprot) {
 			int ret;
-			// IPSec相关的检查，忽略
+
 			if (!ipprot->no_policy) {
 				if (!xfrm4_policy_check(NULL, XFRM_POLICY_IN, skb)) {
 					kfree_skb(skb);
@@ -404,113 +465,133 @@ static int ip_local_deliver_finish(struct sk_buff *skb)
 				}
 				nf_reset(skb);
 			}
-            // 调用传输层接口处理，对于TCP是tcp_v4_rcv()
+			// 调用传输层接口处理
 			ret = ipprot->handler(skb);
-            // 如果上层的处理返回错误，这里会将错误码作为协议号，重新执行上述流程，
-            // 这一般会匹配到ICMP模块进行处理
+			// 如果上层的处理返回错误，这里会将错误码作为协议号，重新执行上述流程
 			if (ret < 0) {
 				protocol = -ret;
 				goto resubmit;
 			}
-			IP_INC_STATS_BH(IPSTATS_MIB_INDELIVERS);
+			__IP_INC_STATS(net, IPSTATS_MIB_INDELIVERS);
 		} else {
 			if (!raw) {
 				if (xfrm4_policy_check(NULL, XFRM_POLICY_IN, skb)) {
-					IP_INC_STATS_BH(IPSTATS_MIB_INUNKNOWNPROTOS);
+					__IP_INC_STATS(net, IPSTATS_MIB_INUNKNOWNPROTOS);
+					//没有对应的上层协议，发送ICMP不可达报文
 					icmp_send(skb, ICMP_DEST_UNREACH,
 						  ICMP_PROT_UNREACH, 0);
 				}
-			} else
-				IP_INC_STATS_BH(IPSTATS_MIB_INDELIVERS);
-            // 没有对应的上层协议时，需要丢弃该数据包
-			kfree_skb(skb);
+				kfree_skb(skb);
+			} else {
+				__IP_INC_STATS(net, IPSTATS_MIB_INDELIVERS);
+				consume_skb(skb);
+			}
 		}
 	}
  out:
 	rcu_read_unlock();
+
 	return 0;
 }
+}
 ```
-
 
 ## 3.IPv4转发数据包流程
 ### 3.1 ip_forward()
 ```c
 int ip_forward(struct sk_buff *skb)
 {
+	u32 mtu;
 	struct iphdr *iph;	/* Our header */
 	struct rtable *rt;	/* Route we use */
-	struct ip_options * opt	= &(IPCB(skb)->opt);
-	// IPSec相关检查，忽略
-	if (!xfrm4_policy_check(NULL, XFRM_POLICY_FWD, skb))
-		goto drop;
-	// 如果有路由告警信息，处理成功后直接返回，不再转发这种数据包
-	if (IPCB(skb)->opt.router_alert && ip_call_ra_chain(skb))
-		return NET_RX_SUCCESS;
- 
+	struct ip_options *opt	= &(IPCB(skb)->opt);
+	struct net *net;
+
+	/* that should never happen */
 	// 确保该数据包确实是让自己转发的
 	if (skb->pkt_type != PACKET_HOST)
 		goto drop;
-	// 转发会修改IP的首部字段，所以需要把检验和设置为CHECKSUM_NONE
+
+	if (unlikely(skb->sk))
+		goto drop;
+
+	if (skb_warn_if_lro(skb))
+		goto drop;
+
+	if (!xfrm4_policy_check(NULL, XFRM_POLICY_FWD, skb))
+		goto drop;
+
+	if (IPCB(skb)->opt.router_alert && ip_call_ra_chain(skb))
+		return NET_RX_SUCCESS;
+
+	// 转发会修改IP的首部字段，所以需要把检验和设置为CHECKSUM_NONE重新校验
 	skb_forward_csum(skb);
- 
+	net = dev_net(skb->dev);
+
 	/*
 	 *	According to the RFC, we must first decrease the TTL field. If
 	 *	that reaches zero, we must reply an ICMP control message telling
 	 *	that the packet's lifetime expired.
 	 */
-    // 如果TTL已经减为1，那么向发送段回复生命周期太短的ICMP报文
+	 // 如果TTL已经减为1，那么向发送段回复生命周期太短的ICMP报文
 	if (ip_hdr(skb)->ttl <= 1)
 		goto too_many_hops;
-	// IPSec相关，忽略
+
 	if (!xfrm4_route_forward(skb))
 		goto drop;
- 
+
 	// 严格源路由选项检查
-	rt = (struct rtable*)skb->dst;
-	if (opt->is_strictroute && rt->rt_dst != rt->rt_gateway)
+	rt = skb_rtable(skb);
+
+	if (opt->is_strictroute && rt->rt_uses_gateway)
 		goto sr_failed;
-	// IP分片相关处理
-	if (unlikely(skb->len > dst_mtu(&rt->u.dst) && !skb_is_gso(skb) &&
-		     (ip_hdr(skb)->frag_off & htons(IP_DF))) && !skb->local_df) {
-		IP_INC_STATS(IPSTATS_MIB_FRAGFAILS);
-		icmp_send(skb, ICMP_DEST_UNREACH, ICMP_FRAG_NEEDED, htonl(dst_mtu(&rt->u.dst)));
+
+	// IP分片相关处理，mtu过大不能转发，发送需要分片的icmp错误报文
+	IPCB(skb)->flags |= IPSKB_FORWARDED;
+	mtu = ip_dst_mtu_maybe_forward(&rt->dst, true);
+	if (ip_exceeds_mtu(skb, mtu)) {
+		IP_INC_STATS(net, IPSTATS_MIB_FRAGFAILS);
+		icmp_send(skb, ICMP_DEST_UNREACH, ICMP_FRAG_NEEDED,
+			  htonl(mtu));
 		goto drop;
 	}
- 
+
 	/* We are about to mangle packet. Copy it! */
-	if (skb_cow(skb, LL_RESERVED_SPACE(rt->u.dst.dev)+rt->u.dst.header_len))
+	if (skb_cow(skb, LL_RESERVED_SPACE(rt->dst.dev)+rt->dst.header_len))
 		goto drop;
 	iph = ip_hdr(skb);
- 
-    // 递减TTL
+
+	/* Decrease ttl after skb cow done */
+	//递减TTL
 	ip_decrease_ttl(iph);
- 
+
 	/*
 	 *	We now generate an ICMP HOST REDIRECT giving the route
 	 *	we calculated.
 	 */
-    // 路由重定向选项处理
-	if (rt->rt_flags&RTCF_DOREDIRECT && !opt->srr && !skb->sp)
+	  // 关于路由重定向选项处理
+	if (IPCB(skb)->flags & IPSKB_DOREDIRECT && !opt->srr &&
+	    !skb_sec_path(skb))
 		ip_rt_send_redirect(skb);
- 
+
 	// 根据TOS字段转换出优先级
 	skb->priority = rt_tos2priority(iph->tos);
- 
+	
 	// 进入FORWARD链，如果通过调用ip_forward_finish()完成转发过程处理
-	return NF_HOOK(PF_INET, NF_INET_FORWARD, skb, skb->dev, rt->u.dst.dev,
+	return NF_HOOK(NFPROTO_IPV4, NF_INET_FORWARD,
+		       net, NULL, skb, skb->dev, rt->dst.dev,
 		       ip_forward_finish);
- 
+
 sr_failed:
 	/*
 	 *	Strict routing permits no gatewaying
 	 */
 	 icmp_send(skb, ICMP_DEST_UNREACH, ICMP_SR_FAILED, 0);
 	 goto drop;
- 
+
 too_many_hops:
 	/* Tell the sender its packet died... */
-	IP_INC_STATS_BH(IPSTATS_MIB_INHDRERRORS);
+	__IP_INC_STATS(net, IPSTATS_MIB_INHDRERRORS);
 	icmp_send(skb, ICMP_TIME_EXCEEDED, ICMP_EXC_TTL, 0);
 drop:
 	kfree_skb(skb);
@@ -520,16 +601,17 @@ drop:
 
 ### 3.2 ip_forward_finish()
 ```c
-static int ip_forward_finish(struct sk_buff *skb)
+static int ip_forward_finish(struct net *net, struct sock *sk, struct sk_buff *skb)
 {
-	struct ip_options * opt	= &(IPCB(skb)->opt);
- 
-	IP_INC_STATS_BH(IPSTATS_MIB_OUTFORWDATAGRAMS);
-	// 处理转发选项
+	struct ip_options *opt	= &(IPCB(skb)->opt);
+
+	__IP_INC_STATS(net, IPSTATS_MIB_OUTFORWDATAGRAMS);
+	__IP_ADD_STATS(net, IPSTATS_MIB_OUTOCTETS, skb->len);
+	// 处理IP转发选项
 	if (unlikely(opt->optlen))
 		ip_forward_options(skb);
-	// 直接调用路由输出，指向的应该是ip_output()或者ip_mc_output()
-	return dst_output(skb);
+	// 直接调用路由输出，指向的应该是单播ip_output()或者组播ip_mc_output()
+	return dst_output(net, sk, skb);
 }
 ```
 
