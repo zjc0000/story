@@ -107,7 +107,8 @@ static int ip_finish_output(struct net *net, struct sock *sk, struct sk_buff *sk
 	//获取mtu
 	mtu = ip_skb_dst_mtu(sk, skb);
 	
-	//开启了gso选项，则调用gso输出 
+	//gso是一种利用网卡对数据包分片，减轻CPU负荷的一种技术，与之对应的接收技术是gro，都是通过减少数据包通过协议栈的次数来降低CPU负担
+	//开启了gso选项，则调用gso输出 ,最终调用还是ip_finish_output2
 	if (skb_is_gso(skb))
 		return ip_finish_output_gso(net, sk, skb, mtu);
 	//若没有开启gso且包长大于mtu，则需进行分片后再输出
