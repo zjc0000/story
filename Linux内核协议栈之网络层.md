@@ -1,6 +1,5 @@
 # Linux内核协议栈之网络层
 
-
 [toc]
 ## 1.网络层协议整体流程图
 
@@ -450,7 +449,8 @@ static int ip_local_deliver_finish(struct net *net, struct sock *sk, struct sk_b
 		int raw;
 
 	resubmit:
-		// 网络层 RAW 套接字处理
+		// 网络层 RAW 套接字处理，若匹配上就通过 skb_clone() 克隆报文并交给相应的原始套接字来处理
+		//ref:https://blog.csdn.net/wangquan1992/article/details/112787536
 		raw = raw_local_deliver(skb, protocol);
 		
 		// 从inet_protos数组中寻找上层协议提供的接收处理回调
