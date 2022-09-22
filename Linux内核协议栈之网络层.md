@@ -3,7 +3,6 @@
 [toc]
 ## 1.网络层协议整体流程图
 
-
 ![网络层协议栈整体流程图](https://github.com/zjc0000/story_images/raw/main/小书匠/1663812594329.png)
 
 ## 2.IPv4发送数据包流程
@@ -863,5 +862,7 @@ static int ip_forward_finish(struct net *net, struct sock *sk, struct sk_buff *s
 ```
 
 ***整理来源：***
+https://www.cnblogs.com/jmilkfan-fanguiju/p/12789808.html
+https://www.cnblogs.com/wanpengcoder/p/11755349.html
 https://blog.csdn.net/wangquan1992/article/details/109188604
 https://blog.csdn.net/wangquan1992/article/details/109196476
