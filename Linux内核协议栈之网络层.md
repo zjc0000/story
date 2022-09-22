@@ -449,7 +449,9 @@ static int ip_local_deliver_finish(struct net *net, struct sock *sk, struct sk_b
 		int raw;
 
 	resubmit:
+		//创建面向连接的TCP和创建面向无连接的UDP套接字，在接收和发送时只能操作数据部分，而不能对IP首部或TCP和UDP首部进行操作。如果想要操作IP首部或传输层协议首部，就需要创建网络层原始套接字
 		// 网络层 RAW 套接字处理，若匹配上就通过 skb_clone() 克隆报文并交给相应的原始套接字来处理
+		// 注意：这里只是将报文克隆一份交给原始套接字，而该报文还是会继续走后续的协议栈处理流程。
 		//ref:https://blog.csdn.net/wangquan1992/article/details/112787536
 		raw = raw_local_deliver(skb, protocol);
 		
