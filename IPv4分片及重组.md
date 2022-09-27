@@ -23,7 +23,8 @@
 
 	if ((iph->frag_off & htons(IP_DF)) == 0)
 		return ip_do_fragment(net, sk, skb, output);
-
+	// 一旦进入该函数，说明skb过大，需要进行IP分片，但是又设置了DF标记或者本身是抑制分片的，
+	// 那么发送失败，向源端发送ICMP报文，这里主要是为forward数据所判断。
 	if (unlikely(!skb->ignore_df ||
 		     (IPCB(skb)->frag_max_size &&
 		      IPCB(skb)->frag_max_size > mtu))) {
@@ -55,43 +56,64 @@ int ip_do_fragment(struct net *net, struct sock *sk, struct sk_buff *skb,
 	    (err = skb_checksum_help(skb)))
 		goto fail;
 
-	/*
-	 *	Point into the IP datagram header.
-	 */
-
 	iph = ip_hdr(skb);
 
 	mtu = ip_skb_dst_mtu(sk, skb);
 	if (IPCB(skb)->frag_max_size && IPCB(skb)->frag_max_size < mtu)
 		mtu = IPCB(skb)->frag_max_size;
-
-	/*
-	 *	Setup starting values.
-	 */
-
 	hlen = iph->ihl * 4;
+	// 这里 mtu代表每个IP片段能够容纳的L4载荷，所以需要在MTU基础上去掉IP首部的开销
 	mtu = mtu - hlen;	/* Size of data space */
 	IPCB(skb)->flags |= IPSKB_FRAG_COMPLETE;
 	ll_rs = LL_RESERVED_SPACE(rt->dst.dev);
-
-	/* When frag_list is given, use it. First, check its validity:
-	 * some transformers could create wrong frag_list or break existing
-	 * one, it is not prohibited. In this case fall back to copying.
-	 *
-	 * LATER: this step can be merged to real generation of fragments,
-	 * we can switch to copy when see the first bad fragment.
+	 
+	/*
+	 * 如果4层将数据包分片了，那么就会把这些数据包放到skb的frag_list链表中，
+	 * 因此这里首先先判断frag_list链表是否为空，为空的话将会进行slow 分片
 	 */
 	if (skb_has_frag_list(skb)) {
 		struct sk_buff *frag, *frag2;
+		
+		/*
+		 * 取得第一个数据报的len.当sk_write_queue队列被flush后，
+		 * 除了第一个切好包的另外的包都会加入到frag_list中(接口ip_push_pending_frames)，
+		 * 而这里需要得到的第一个包(也就是本身这个sk_buff）的长度。
+		 * first_len是第一个skb中所有数据的总长度，包括线性缓冲区和frags[]数组
+		 */
+
 		unsigned int first_len = skb_pagelen(skb);
 
+		/*
+		 * 接下来的判断都是为了确定能进行fast分片。分片不能被共享，
+		 * 这是因为在fast path 中，需要加给每个分片不同的ip头(而并
+		 * 不会复制每个分片)。因此在fast path中是不可接受的。而在
+		 * slow path中，就算有共享也无所谓，因为他会复制每一个分片，
+		 * 使用一个新的buff。   
+		 */
+		
+  		/*
+		 * 判断第一个包长度是否符合一些限制(包括mtu，mf位等一些限制).
+		 * 如果第一个数据报的len没有包含mtu的大小这里之所以要把第一个
+		 * 切好片的数据包单独拿出来检测，是因为一些域是第一个包所独有
+		 * 的(比如IP_MF要为1）。这里由于这个mtu是不包括hlen的mtu，因此
+		 * 需要减去一个hlen。  
+  		 */
+ 
+		/*
+		 * 1. 条件1说明高层协议切割的skb的长度还是太长了；
+		 * 2. 第一个片段长度必须是8字节对齐的（IP片段偏移量是8字节对齐决定的）；
+		 * 3. 偏移量在下面的分段过程中才会进行设置，这里不应该有值；
+		 * 4. skb不能是被共享的，因为快速路径上不会进行skb拷贝，而是直接修改skb；
+		 * 上述4个条件有任何一个不满足，那么就用慢速路径完成分片
+		 */
 		if (first_len - hlen > mtu ||
 		    ((first_len - hlen) & 7) ||
 		    ip_is_fragment(iph) ||
 		    skb_cloned(skb) ||
 		    skb_headroom(skb) < ll_rs)
 			goto slow_path;
-
+			
+		// 遍历frag_list列表，检查是否所有的分片是否符合快速分片处理
 		skb_walk_frags(skb, frag) {
 			/* Correct geometry. */
 			if (frag->len > mtu ||
@@ -111,8 +133,7 @@ int ip_do_fragment(struct net *net, struct sock *sk, struct sk_buff *skb,
 			skb->truesize -= frag->truesize;
 		}
 
-		/* Everything is OK. Generate! */
-
+		// 对第一个分片的特殊处理
 		err = 0;
 		offset = 0;
 		frag = skb_shinfo(skb)->frag_list;
@@ -122,7 +143,7 @@ int ip_do_fragment(struct net *net, struct sock *sk, struct sk_buff *skb,
 		iph->tot_len = htons(first_len);
 		iph->frag_off = htons(IP_MF);
 		ip_send_check(iph);
-
+		// 循环处理后面所有的分片
 		for (;;) {
 			/* Prepare header of the next frame,
 			 * before previous one went down. */
@@ -144,7 +165,7 @@ int ip_do_fragment(struct net *net, struct sock *sk, struct sk_buff *skb,
 				/* Ready, complete checksum */
 				ip_send_check(iph);
 			}
-
+			// 继续发送过程,先发送首片ip的skb自己，后面继续发送frag
 			err = output(net, sk, skb);
 
 			if (!err)
@@ -156,12 +177,12 @@ int ip_do_fragment(struct net *net, struct sock *sk, struct sk_buff *skb,
 			frag = skb->next;
 			skb->next = NULL;
 		}
-
+		// 一切正常，分片过程从这里返回	
 		if (err == 0) {
 			IP_INC_STATS(net, IPSTATS_MIB_FRAGOKS);
 			return 0;
 		}
-
+		// 分片或者发送过程失败了，释放所有的skb分片
 		while (frag) {
 			skb = frag->next;
 			kfree_skb(frag);
@@ -182,110 +203,88 @@ slow_path_clean:
 
 slow_path:
 	iph = ip_hdr(skb);
-
-	left = skb->len - hlen;		/* Space per frame */
-	ptr = hlen;		/* Where to start from */
-
-	/*
-	 *	Fragment the datagram.
-	 */
-
+	// left保存整个IP报文中剩余需要分段的报文长度，在下面分段过程中会逐渐减小，
+	// 直到为0说明分段过程结束
+	left = skb->len - hlen;	
+	// ptr指向L4载荷的偏移，初始值指向L4报文的开头
+	ptr = raw + hlen;
+	// offset为偏移量，不包括DF、MF标记
 	offset = (ntohs(iph->frag_off) & IP_OFFSET) << 3;
+	// 标识是否是IP报文的最后一个片段，因为最后一个片段的MF标记是0
 	not_last_frag = iph->frag_off & htons(IP_MF);
-
-	/*
-	 *	Keep copying data until we run out.
-	 */
-
+	// 循环创建新的skb2，然后拷贝数据，完成分段（left==0）
 	while (left > 0) {
+		// 调整len为本轮循环分片中能够容纳的L4报文载荷长度
 		len = left;
 		/* IF: it doesn't fit, use 'mtu' - the data space left */
 		if (len > mtu)
 			len = mtu;
-		/* IF: we are not sending up to and including the packet end
-		   then align the next start on an eight byte boundary */
+		// IP报文首部的片偏移字段格式决定了非最后一个IP片段的偏移量必须是8字节对齐的
 		if (len < left)	{
 			len &= ~7;
 		}
-
-		/* Allocate buffer */
-		skb2 = alloc_skb(len + hlen + ll_rs, GFP_ATOMIC);
-		if (!skb2) {
+ 
+		// 分配skb2，长度包括三部分:len代表的L4报文部分；hlen代表的IP报文首部；ll_rs代表的L2报文首部
+		if ((skb2 = alloc_skb(len+hlen+ll_rs, GFP_ATOMIC)) == NULL) {
+			NETDEBUG(KERN_INFO "IP: frag: no memory for new fragment!\n");
 			err = -ENOMEM;
 			goto fail;
-		}
 
-		/*
-		 *	Set up data on packet
-		 */
-
+		// 首先设置skb2中的各个字段
 		ip_copy_metadata(skb2, skb);
 		skb_reserve(skb2, ll_rs);
 		skb_put(skb2, len + hlen);
 		skb_reset_network_header(skb2);
 		skb2->transport_header = skb2->network_header + hlen;
-
-		/*
-		 *	Charge the memory for the fragment to any owner
-		 *	it might possess
-		 */
-
+		// 设置owner，内存的消耗将会记录到owner的账上
 		if (skb->sk)
 			skb_set_owner_w(skb2, skb->sk);
-
-		/*
-		 *	Copy the packet header into the new buffer.
-		 */
-
+ 
+		// 先从源skb的线性缓冲区将IP报文首部拷贝到skb2的线性缓冲区，因为内存上是连续的，
+		// 所以直接使用memcpy拷贝即可
 		skb_copy_from_linear_data(skb, skb_network_header(skb2), hlen);
-
-		/*
-		 *	Copy a block of the IP datagram.
-		 */
+ 
+		// 下面的数据拷贝就复杂了一些，因为慢速路径要能够处理任何可能的skb的数据组织方式。
+		// skb_copy_bits()将从skb->data开始偏移的ptr位置开始拷贝数据，共拷贝len字节到
+		// skb2传输层开始的位置，注意这里在处理ptr偏移会考虑页缓冲区和frag_list两种情况
 		if (skb_copy_bits(skb, ptr, skb_transport_header(skb2), len))
 			BUG();
+		// 分段完成，left减去1个片段的长度
 		left -= len;
 
-		/*
-		 *	Fill in the new header fields.
-		 */
+		 // 填充IP首部，主要是选项和偏移字段
 		iph = ip_hdr(skb2);
 		iph->frag_off = htons((offset >> 3));
 
 		if (IPCB(skb)->flags & IPSKB_FRAG_PMTU)
 			iph->frag_off |= htons(IP_DF);
 
-		/* ANK: dirty, but effective trick. Upgrade options only if
-		 * the segment to be fragmented was THE FIRST (otherwise,
-		 * options are already fixed) and make it ONCE
-		 * on the initial skb, so that all the following fragments
-		 * will inherit fixed options.
-		 */
+		// ip_options_fragment()会在第一个IP片段的基础上将后面片段不需要的IP选项删除，
+		// 这样后面的IP片段直接继承即可（前面已经拷贝），无需重新设定选项，所以这里只
+		// 在第一个片段分片过程中调用ip_options_fragment()
 		if (offset == 0)
 			ip_options_fragment(skb);
 
-		/*
-		 *	Added AC : If we are fragmenting a fragment that's not the
-		 *		   last fragment then keep MF on each bit
-		 */
+		// 不是最后一个包，因此设置mf位
 		if (left > 0 || not_last_frag)
 			iph->frag_off |= htons(IP_MF);
+		// 更新ptr和offset，为下一个分片做好准备
 		ptr += len;
 		offset += len;
 
-		/*
-		 *	Put this fragment into the sending queue.
-		 */
+		// IP首部的total字段表示的是IP片段的长度
 		iph->tot_len = htons(len + hlen);
-
+		// 计算IP首部校验和
 		ip_send_check(iph);
-
+		// 调用发送接口继续发送过程
 		err = output(net, sk, skb2);
 		if (err)
 			goto fail;
 
 		IP_INC_STATS(net, IPSTATS_MIB_FRAGCREATES);
 	}
+	
+	// 原有的IP报文都已经被分割成一个个新的skb，所以处理结束后，原来的skb需要释放
 	consume_skb(skb);
 	IP_INC_STATS(net, IPSTATS_MIB_FRAGOKS);
 	return err;
