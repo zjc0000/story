@@ -1,5 +1,4 @@
 # IPv4分片及重组详解
-
 [toc]
 ## 1.IPv4分片
 ### 1.1 IPv4分片情况分类
@@ -13,6 +12,7 @@
 对于转发的数据包，则无法向本地发送一样，提前做很多的工作，网络层必须依靠自己来兼容所有可能的情况。同样的，对于一些特殊的异常场景，本机发送的数据包也有可能并没有按照预期情况组织，这时网络层也要能够兼容处理。
 
 综上，网络层在实现分段时，设计了快速路径和慢速路径两个流程来分别对应上面的两种情况。
+
 ### 1.2 IP分片 ip_fragment()
  ```c
  static int ip_fragment(struct net *net, struct sock *sk, struct sk_buff *skb,
@@ -296,8 +296,10 @@ fail:
 }
 ```
 
-## 1 IP分片重组控制信息数据结构
-### 1.1 网络命名空间struct netns_ipv4
+
+## 2.IPv4分片重组
+### 2.1 IP分片重组控制信息数据结构
+#### 2.1.1 网络命名空间struct netns_ipv4
 ```c
 struct net {
 ...
@@ -318,7 +320,7 @@ struct netns_frags {
 ...
 };
 ```
-### 1.2 IPV4协议用于分片重组的全局哈希表信息 struct inet_frags
+#### 2.1.2 IPV4协议用于分片重组的全局哈希表信息 struct inet_frags
 在内核中同时存在很多需要重组的IP数据包，理论上最大值为1024×128。Linux内核根据接收到的分片的IP头相关信息计算得到一个哈希值，将该值转化到0~1023找到IP分片队列链表。遍历链表找到对应的IP分片队列，若不存在则新建一个IP分片队列。
 
 ```c
@@ -343,7 +345,7 @@ struct inet_frags {
 ...
 };
 ```
-### 1.3 IP分片队列 struct ipq [struct inet_frag_queue]
+#### 2.1.3 IP分片队列 struct ipq [struct inet_frag_queue]
 ```c
 //每个ipq结构体表示一个IP分片队列
 struct ipq {
@@ -375,11 +377,11 @@ struct inet_frag_queue {
 ...
 };
 ```
-### 1.4 上述数据结构之间的关系
+#### 2.1.4 上述数据结构之间的关系
 
 ![IP分片重组数据结构](https://github.com/zjc0000/story_images/raw/main/小书匠/1663649025103.png)
-## 2 IP分片重组完整流程
-### 2.1 IP片段接收入口ip_local_deliver()
+### 2.2 IP分片重组完整流程
+#### 2.2.1 IP片段接收入口ip_local_deliver()
  ```c
  int ip_local_deliver(struct sk_buff *skb)
 {	
@@ -400,7 +402,8 @@ static inline bool ip_is_fragment(const struct iphdr *iph)
 	return (iph->frag_off & htons(IP_MF | IP_OFFSET)) != 0;
 }
  ```
- ### 2.2 IP片段重组 ip_defrag()
+
+#### 2.2.2 IP片段重组 ip_defrag()
  ```c
  int ip_defrag(struct net *net, struct sk_buff *skb, u32 user)
 {
@@ -417,7 +420,8 @@ static inline bool ip_is_fragment(const struct iphdr *iph)
     ......
 }
  ```
- ### 2.3 查找IP分片队列 ip_find()
+ 
+#### 2.2.3 查找IP分片队列 ip_find()
 ```c
 static struct ipq *ip_find(struct net *net, struct iphdr *iph,u32 user, int vif)
 {
@@ -462,7 +466,8 @@ static struct inet_frag_queue *inet_frag_create(struct netns_frags *nf,struct in
     return inet_frag_intern(nf, q, f, arg);
 }
 ```
-### 2.4 重组IP报文 ip_frag_queue()
+
+#### 2.2.4 重组IP报文 ip_frag_queue()
 ```c
 static int ip_frag_queue(struct ipq *qp, struct sk_buff *skb)
 {
@@ -647,7 +652,8 @@ found:
 	}
 }
 ```
-### 2.5 所有分片均已收到重组ip报文 ip_frag_reasm()
+
+#### 2.2.5 所有分片均已收到重组ip报文 ip_frag_reasm()
 ```c
 
 static int ip_frag_reasm(struct ipq *qp, struct sk_buff *prev,struct net_device *dev)
