@@ -1,4 +1,5 @@
 # IPv4分片及重组详解
+
 [toc]
 ## 1.IPv4分片
 ### 1.1 IPv4分片情况分类
@@ -14,8 +15,8 @@
 综上，网络层在实现分段时，设计了快速路径和慢速路径两个流程来分别对应上面的两种情况。
 
 ### 1.2 IP分片 ip_fragment()
- ```c
- static int ip_fragment(struct net *net, struct sock *sk, struct sk_buff *skb,
+```c
+static int ip_fragment(struct net *net, struct sock *sk, struct sk_buff *skb,
 		       unsigned int mtu,
 		       int (*output)(struct net *, struct sock *, struct sk_buff *))
 {
@@ -297,6 +298,9 @@ fail:
 ```
 
 
+
+
+
 ## 2.IPv4分片重组
 ### 2.1 IP分片重组控制信息数据结构
 #### 2.1.1 网络命名空间struct netns_ipv4
@@ -322,7 +326,6 @@ struct netns_frags {
 ```
 #### 2.1.2 IPV4协议用于分片重组的全局哈希表信息 struct inet_frags
 在内核中同时存在很多需要重组的IP数据包，理论上最大值为1024×128。Linux内核根据接收到的分片的IP头相关信息计算得到一个哈希值，将该值转化到0~1023找到IP分片队列链表。遍历链表找到对应的IP分片队列，若不存在则新建一个IP分片队列。
-
 ```c
 //哈希值范围0~1023
 #define INETFRAGS_HASHSZ	1024
@@ -466,7 +469,6 @@ static struct inet_frag_queue *inet_frag_create(struct netns_frags *nf,struct in
     return inet_frag_intern(nf, q, f, arg);
 }
 ```
-
 #### 2.2.4 重组IP报文 ip_frag_queue()
 ```c
 static int ip_frag_queue(struct ipq *qp, struct sk_buff *skb)
@@ -652,7 +654,6 @@ found:
 	}
 }
 ```
-
 #### 2.2.5 所有分片均已收到重组ip报文 ip_frag_reasm()
 ```c
 
@@ -743,6 +744,7 @@ static int ip_frag_reasm(struct ipq *qp, struct sk_buff *prev,struct net_device 
 }
 ```
 ***参考链接***
-（1）https://blog.csdn.net/wangquan1992/article/details/109228044
-（2）https://blog.csdn.net/wangquan1992/article/details/109235276
-（3）https://blog.csdn.net/wangpengqi/article/details/9276117
+（1）https://blog.csdn.net/wangquan1992/article/details/109221056
+（2）https://blog.csdn.net/wangquan1992/article/details/109228044
+（3）https://blog.csdn.net/wangquan1992/article/details/109235276
+（4）https://blog.csdn.net/wangpengqi/article/details/9276117
