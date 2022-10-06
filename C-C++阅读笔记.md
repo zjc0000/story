@@ -5,7 +5,7 @@
 <i class="fas fa-feather-alt"></i>C函数的参数传递规则：所有传递给函数的参数都是按值传递的。但是数组名作为参数时就会产生引用传递的效果。原因为数组名实际上是一个指向数组起始位置的指针。
 <i class="fas fa-feather-alt"></i>typedef 和 #define 的区别：typedef为取别名，在编译时处理；#define仅为简单的替换，为预处理指令。
 <i class="fas fa-feather-alt"></i>左值表示可寻址(location)，右值表示可读（read）。
-<i class="fas fa-feather-alt"></i>当表达式中存在有符号类型和无符号类型时所有的操作数都自动转换为无符号类型。
+<i class="fas fa-feather-alt"></i>当表达式中存在有符号类型和无符号类型时，所有的操作数都**自动转换为无符号类型**。
 <i class="fas fa-feather-alt"></i>NULL 指针是一个定义在标准库中的值为零的常量。在大多数的操作系统上，程序不允许访问地址为 0 的内存，因为该内存是操作系统保留的。因此不会产生歧义。
 <i class="fas fa-feather-alt"></i>在不同操作系统中指针大小结论：在32位操作系统下，指针是占4个字节空间大小，不管是什么数据类型；在64位操作系统下，指针是占8个字节空间大小，不管是什么数据类型。
 <i class="fas fa-feather-alt"></i>除了优先级以外，下标引用和间接引用完全相同。array不必是数组名，只需是指针就可以通过下标访问。array[subscript] = \*(array+subscript)
@@ -13,6 +13,7 @@
 <i class="fas fa-feather-alt"></i>回调函数：将函数指针作为参数传递给回调函数，回调函数将会调用指针所指向的函数。
 <i class="fas fa-feather-alt"></i>转移表实质上就是函数指针数组。根据传入的下标值选择相应的函数执行。
 <i class="fas fa-feather-alt"></i>任何指针类型可随意转换为void\*指针，在不确定传入类型的函数中使用void\*指针。但void\*转换为其他类型指针时必须小心。
+<i class="fas fa-feather-alt"></i>文件末尾标志EOF定义为整型，它的值在任何可能出现的字符之外。
 
 # 2.C语言程序从编写到运行历经的几个阶段
 ![](https://github.com/zjc0000/story_images/raw/main/小书匠/1663651116867.png)
@@ -72,6 +73,7 @@ int const \* const p 指针本身和指向的值都不能改变。
 需要注意：
 （1） 可变参数没有声明类型，都将执行缺省参数类型。
 （2） 至少需要一个命名参数指定参数数量，甚至更多参数来提供参数类型信息。
+
 
 # 10.指向数组的指针和指针数组
 指向数组的指针：定义方式 int martix\[3\]\[10\];   int (\*p)\[10\] = martix；
@@ -160,11 +162,41 @@ c.##用于将其两边的符号连接成一个符号，允许宏定义从分离�
 ADD_TO_SUM(5, 25);  --->   sum5 += 25;
 ```
 （4）宏和函数的不同之处
-
 ![](https://github.com/zjc0000/story_images/raw/main/小书匠/1663652074915.png)
+
+# 16.信号
+（1）标准定义的信号
+![](https://raw.githubusercontent.com/zjc0000/story_images/main/小书匠/1664966754999.png)
+（2）相关函数
 ```c
-#define ENTER() printk(KERN_DEBUG "%s() Enter", __func__)
-#define EXIT() printk(KERN_DEBUG "%s() Exit", __func__)
-#define ERR(fmt, args...) printk(KERN_ERR "%s()-%d: " fmt "\n", __func__, __LINE__, ##args)
-#define DBG(fmt, args...) printk(KERN_DEBUG "%s()-%d: " fmt "\n", __func__, __LINE__, ##args)
+//调用该函数引发参数所指定的信号
+int raise(int sig);
+//信号处理函数
+//第一个参数为需要处理的信号
+//第二个参数为函数指针，指向你希望为这个信号设置的信号处理函数
+//函数返回值为函数指针，指向该信号触发以前的处理函数，用于程序恢复
+void ( *signal( int sig, void ( * handler )( int )))( int );
+```
+（3）volatie数据
+信号可能在任何时候发生，所以由信号处理函数修改的变量的值可能在任何时候发生改变。
+```c
+//在普通情况下，第一个测试和第二个测试具有相同的结果，如果信号处理函数修改了这个变量，第二个测试结果可能不同。
+if(value){
+	printf("TRUE\n");
+}else{
+	printf("FALSE\n");
+}
+if(value){
+	printf("TRUE\n");
+}else{
+	printf("FALSE\n");
+}
+//然而除非value被声明为volatie，编译器会优化成下面这段代码，这显然不是我们想要的。
+if(value){
+	printf("TRUE\n");
+	printf("TRUE\n");
+}else{
+	printf("FALSE\n");
+	printf("FALSE\n");
+}
 ```
