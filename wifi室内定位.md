@@ -5,7 +5,10 @@
 （2）根据相关带宽降维，从子载波数降维为子信道数
 
 ![](https://raw.githubusercontent.com/zjc0000/story_images/main/小书匠/1677571178828.png)
+（3）WKNN算法中引入核方法kernel methods来筛选AP并计算WKNN的权重
+positoning问题，根据权重计算具体位置坐标
 
+![](https://raw.githubusercontent.com/zjc0000/story_images/main/小书匠/1677828267742.png)
 
 #### **WiFi_Indoor_Location_Method_Based_on_RSSI**
 （1）引入loss rate减小样本集，只选择实测数据时出现次数大于某一阈值的AP。同时也考虑稳定性，只选择方差小于某一阈值的AP.
