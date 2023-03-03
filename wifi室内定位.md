@@ -5,7 +5,7 @@
 （2）根据相关带宽降维，从子载波数降维为子信道数
 
 ![](https://raw.githubusercontent.com/zjc0000/story_images/main/小书匠/1677571178828.png)
-（3）WKNN算法中引入核方法kernel methods来筛选AP并计算WKNN的权重
+（3）WKNN算法中引入核方法kernel methods来筛选AP并计算WKNN的权重，同时考虑rss和csi，μ是可调节的参数来平衡rss和csi的在定位时所占比重
 positoning问题，根据权重计算具体位置坐标
 
 ![](https://raw.githubusercontent.com/zjc0000/story_images/main/小书匠/1677828267742.png)
