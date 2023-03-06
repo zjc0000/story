@@ -1,5 +1,8 @@
-#### **An_improved_WiFi_indoor_localization_method_combining_channel_state_information_and_received_signal_strength**
+#### An_Encoded_LSTM_Network_Model_for_WiFi-based_Indoor_Positioning
+RSS信息样本集过于稀疏，采用全连接层提取特征，LSTM来做决策，没有采用传统的WKNN算法。
 
+![](https://raw.githubusercontent.com/zjc0000/story_images/main/小书匠/1678092838264.png)
+#### **An_improved_WiFi_indoor_localization_method_combining_channel_state_information_and_received_signal_strength**
 同时使用CSI信息和RSS信息作为样本集特征值
 （1）CSI转化为CIR，可参照matlab示例相同做法openExample('wlan/PositioningWith80211azFingerprintingAndDeepLearningExample')
 （2）根据相关带宽降维，从子载波数降维为子信道数
