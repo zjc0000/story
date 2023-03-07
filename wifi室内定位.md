@@ -1,4 +1,7 @@
 #### An_Encoded_LSTM_Network_Model_for_WiFi-based_Indoor_Positioning
+数据集
+
+![](https://raw.githubusercontent.com/zjc0000/story_images/main/小书匠/1678092938681.png)
 RSS信息样本集过于稀疏，采用全连接层提取特征，LSTM来做决策，没有采用传统的WKNN算法。
 
 ![](https://raw.githubusercontent.com/zjc0000/story_images/main/小书匠/1678092838264.png)
